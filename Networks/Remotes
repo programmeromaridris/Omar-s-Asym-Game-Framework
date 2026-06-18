@@ -1,0 +1,72 @@
+--[[
+ ssingle source of truth for all remoteEvents and remote functions
+  you HAVE to add any new remotes here
+
+  server creates these once at startup
+  clients require this module and get references
+
+  current remotes:
+    UseAbility          client fires &server handles
+    AssignRole           server fires &client (killer or survivor)
+    StateChanged         server fires all clients (game state)
+    SyncCooldown         server fires client (ability cooldown update)
+    SwapSupport          client fires, server validates & applies
+    ShowResults          server fires all clients at PostGame
+]]
+
+local RS  = game:GetService("ReplicatedStorage")
+local Remotes = {}
+
+local REMOTE_NAMES = {
+	"UseAbility",
+	"AssignRole",
+	"StateChanged",
+	"SyncCooldown",
+	"SwapSupport",
+	"ShowResults",
+	"SelectCharacter",
+}
+
+-- returns or creates on server a remoteevent by nakme
+local _folder: Folder
+
+local function getFolder(): Folder
+	if not _folder then
+		_folder = RS:FindFirstChild("Remotes")
+		or (function()
+			local folder = Instance.new("Folder")
+			folder.Name = "Remotes"
+			folder.Parent = RS
+			return folder
+		end)()
+	end
+	return _folder
+end
+
+
+-- server calls this once at startup to create all remotes
+function Remotes.Init()
+	local folder = getFolder()
+	
+	for _, name in ipairs(REMOTE_NAMES) do
+		if not folder:FindFirstChild(name) then
+			local remoteEvent = Instance.new("RemoteEvent")
+			remoteEvent.Name = name
+			remoteEvent.Parent = folder
+		end
+	end
+end
+
+
+-- get a specific remote by name
+function Remotes.Get(name: string): RemoteEvent
+	local folder = getFolder()
+	local remote = folder:WaitForChild(name, 10)
+	assert(remote, "Remotes.Get '" .. name .. "' not found after 10s")
+	return remote
+end
+
+
+return Remotes
+
+	
