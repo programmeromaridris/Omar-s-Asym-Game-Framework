@@ -1,0 +1,517 @@
+local BaseCharacter = {}
+BaseCharacter.__index = BaseCharacter
+--[[ 
+	This will be the shared base between basekiller and basesurvivor
+	It owns: loadout, status effects, and roblox model helpers
+	should not know abt game rules, leave that for roundservices and what else
+		]]
+
+
+-- Default fallback table
+BaseCharacter.Defaults = {
+	
+	StoreConfig = {
+		Price = math.huge,
+		Description = "No description provided.",
+		PreviewImage = "", -- todo: placeholder image
+		PreviewClips = {} -- array of video assets
+	},
+	
+	AnimationConfig = {
+		
+		-- Movement
+		Idle = "rbxassetid://0",
+		Walk = "rbxassetid://0",
+		Run = "rbxassetid://0",
+		
+		-- Damage Reaction
+		Hurt = "rbxassetid://0",
+		
+		-- Hurt movement
+		HurtIdle = "rbxassetid://0",
+		HurtWalk = "rbxassetid://0",
+		HurtRun = "rbxassetid://0",
+		
+		
+		-- Abilities
+		
+		Ability1 = "rbxassetid://0",
+		Ability2 = "rbxassetid://0",
+		Ability3 = "rbxassetid://0",
+		Ability4 = "rbxassetid://0",
+		Ability5 = "rbxassetid://0",
+		
+		-- Object interaction
+		ObjectInteraction = "rbxassetid://0",
+	},
+	
+	 
+	-- Killer only chase themes
+	-- ignore on survivors, basekiller will fill in
+	ChaseThemeConfig = {
+		L1 = "rbxassetid://0",
+		L2 = "rbxassetid://0",
+		L3 = "rbxassetid://0",
+		L4 = "rbxassetid://0",
+		L5 = "rbxassetid://0",
+		
+		LastRobloxianStanding = "rbxassetid://0",
+	},
+	
+	-- Voiceline pools, each key is an event name, value is a list of asset IDs
+	-- One is picked at random when the event fires
+
+	VoicelineConfig = {
+		OnSpawn = {},
+		OnHurt = {},
+		OnKill = {},
+		OnEscape = {}, -- survirs
+		OnTaunt = {}
+	},
+	
+	GameplayConfig = {
+		Health = 100,
+		HitboxPriority = 1, 
+		WalkSpeed = 16,
+		SprintSpeed = 26,
+		
+		Stamina = {
+			Max = 100,
+			DrainRate = 10, -- per second while sprinting
+			GainRate = 12 -- per second while not sprinting
+		}
+	}
+}
+
+
+export type StoreConfig = {
+	Price: number?,
+	Description: string?,
+	PreviewImage: string?,
+	PreviewClips: { string }?, 
+}
+
+export type AnimationConfig = {
+	Idle: string?,
+	Walk: string?,
+	Run: string?,
+	Hurt: string?,
+	HurtWalk: string?,
+	HurtRun: string?,
+	Ability1: string?,
+	Ability2: string?,
+	Ability3: string?,
+	Ability4: string?,
+	Ability5: string?,
+	ObjectInteraction : string?,
+}
+
+
+export type ChaseThemeConfig = {
+	L1: string?,
+	L2: string?,
+	L3: string?,
+	L4: string?,
+	L5: string?,
+	LastRobloxianStanding: string?
+}
+
+
+export type VoicelineConfig = {
+	OnSpawn  : { string }?,
+	OnHurt   : { string }?,
+	OnKill   : { string }?,
+	OnEscape : { string }?,
+	OnTaunt  : { string }?,
+	[string] : { string }?,   -- allow custom events
+}
+
+
+export type StaminaConfig = {
+	Max       : number?,
+	DrainRate : number?,
+	GainRate  : number?,
+}
+
+export type GameplayConfig = {
+	Health         : number?,
+	HitboxPriority : number?,
+	WalkSpeed      : number?,
+	SprintSpeed    : number?,
+	Stamina        : StaminaConfig?,
+}
+
+
+export type CharacterConfig = {
+		Player: Player,
+		Model: Model?,
+		Loadout: any, -- this is for the ability loadout instance
+		StoreConfig: StoreConfig?,
+		AnimationConfig: AnimationConfig?,
+		ChaseThemeConfig: ChaseThemeConfig?, -- kilar only
+		VoicelineConfig: VoicelineConfig?,
+		GameplayConfig: GameplayConfig?,
+	}
+----------------------------------------------------------------------------------------------	
+	
+
+
+
+-- Fills every missing gap from defaults into target recursively
+-- doesnt overwrite keys that are alr present
+local function applyDefaults(target: { [any]: any }, defaults:{ [any]: any } )
+	
+	for key, defaultVal in pairs(defaults) do
+		if target[key] == nil then
+			if type(defaultVal) == "table" then
+				target[key] = {}
+				applyDefaults(target[key], defaultVal)
+			else
+				target[key] = defaultVal
+			end
+
+		elseif type(target[key]) == "table" and type(defaultVal) == "table" then
+			applyDefaults(target[key], defaultVal)
+		end	
+	end
+end
+
+
+
+----------------------------------------------------------------------------
+function BaseCharacter.new(config: CharacterConfig)
+	
+	assert(config, "BaseCharacter.new: config is required.")
+	assert(config.Player, "BaseCharacter.new: config.Player is required.")
+
+	
+	local self = setmetatable({}, BaseCharacter)
+	
+	-- Core
+	self.Player = config.Player
+	self.Loadout = config.Loadout
+	self.Model = config.Model or config.Player.Character -- fallback
+	
+	-- start from whatever the caller passed then fill gaps
+	self.StoreConfig = config.StoreConfig or {}
+	self.AnimationConfig = config.AnimationConfig or {}
+	self.ChaseThemeConfig = config.ChaseThemeConfig or {}
+	self.VoicelineConfig = config.VoicelineConfig or {}
+	self.GameplayConfig = config.GameplayConfig or {}
+	
+	applyDefaults(self.StoreConfig,      BaseCharacter.Defaults.StoreConfig)
+	applyDefaults(self.AnimationConfig,  BaseCharacter.Defaults.AnimationConfig)
+	applyDefaults(self.ChaseThemeConfig, BaseCharacter.Defaults.ChaseThemeConfig)
+	applyDefaults(self.VoicelineConfig,  BaseCharacter.Defaults.VoicelineConfig)
+	applyDefaults(self.GameplayConfig,   BaseCharacter.Defaults.GameplayConfig)
+	
+	
+	self.WalkSpeed = self.GameplayConfig.WalkSpeed
+	self.MaxHealth = self.GameplayConfig.Health
+	
+	-- Runtime state
+	self.StatusEffects = {}
+	self._connections  = {}
+	self._stamina      = self.GameplayConfig.Stamina.Max
+	self._isSprinting  = false
+	self._currentLocomotionKey = nil
+	
+	
+	-- Killing the default animator 
+	if self.Model then
+		local defaultAnimate = self.Model:FindFirstChild("Animate")
+		if defaultAnimate then
+			defaultAnimate:Destroy()
+		end
+		
+		-- Stop any default tracks roblox started playing automatically
+		local animator = self:GetAnimator()
+		if animator then
+			for _, playingTrack in ipairs(animator:GetPlayingAnimationTracks()) do
+				playingTrack:Stop()
+			end
+		end
+	end
+	
+	return self
+end
+
+
+
+
+
+-- // ===================================================================================
+-- Helper functions
+-- // ===================================================================================
+function BaseCharacter:GetModel()
+	return self.Model
+end
+
+function BaseCharacter:GetHumanoid()
+	local model = self:GetModel()
+	return model and model:FindFirstChildOfClass("Humanoid")
+end
+
+function BaseCharacter:GetRoot()
+	local model = self:GetModel()
+	return model and model:FindFirstChild("HumanoidRootPart")
+end
+
+function BaseCharacter:IsHurt(): boolean
+	return false
+end
+
+
+
+-- // ===================================================================================
+-- Voicelines
+-- // ===================================================================================
+--	Picks and returns a random voiceline asset id for given event name
+-- returns nil if pool is empty or event doesnt exist
+function BaseCharacter:PlayVoiceline(eventName: string): string?
+	local pool = self.VoicelineConfig[eventName]
+	if not pool or #pool == 0 then warn("Voiceline pool is likely empty.") return nil end
+
+	return pool[math.random(1, #pool)]
+end
+
+
+
+
+
+
+-- // ===================================================================================
+-- Animations
+-- // ===================================================================================
+
+function BaseCharacter:GetAnimator()
+	local hum = self:GetHumanoid()
+	if not hum then return nil end
+	
+	local animator = hum:FindFirstChildOfClass("Animator")
+	if not animator then
+		animator = Instance.new("Animator")
+		animator.Parent = hum
+	end
+	return animator
+end
+
+
+-- Animkey refers to the keys in animconfig
+function BaseCharacter:PlayAnimation(animKey: string, fadeTime: number?, weight: number?, speed: number?): AnimationTrack?
+	local assetId = self.AnimationConfig[animKey]
+	if not assetId or assetId == "rbxassetid://0" or assetId == "" then
+		warn("[BaseCharacter] Missing animation asset key '" .. tostring(animKey) )
+		return nil
+	end
+	
+	-- Initialize cache table if it doesnt already exist
+	self._loadedAnims = self._loadedAnims or {}
+	local track = self._loadedAnims[animKey]
+	
+	if not track then
+		local animator = self:GetAnimator()
+		if not animator then return nil end
+		
+		local anim = Instance.new("Animation")
+		anim.AnimationId = assetId
+		track = animator:LoadAnimation(anim)
+		
+		-- Configure looping and priorities on load
+		local lowerKey = string.lower(animKey)
+		if string.find(lowerKey, "idle") or string.find(lowerKey, "walk") or string.find(lowerKey, "run") then
+			track.Looped = true
+			track.Priority = Enum.AnimationPriority.Movement
+		elseif string.find(lowerKey, "ability") or string.find(lowerKey, "interaction") then
+			track.Looped = false -- abilities shouldnt loop forever
+			track.Priority = Enum.AnimationPriority.Action -- overrides moving limbs
+		end
+		self._loadedAnims[animKey] = track
+	end
+	
+	track:Play(fadeTime, weight, speed)
+	return track
+end
+
+
+
+
+function BaseCharacter:StopAnimation(animKey: string, fadeTime: number?)
+	if self._loadedAnims and self._loadedAnims[animKey] then
+		self._loadedAnims[animKey]:Stop(fadeTime)
+	end
+end
+
+function BaseCharacter:UpdateLocomotion()
+	local root = self:GetRoot()
+	if not root then return end
+	
+	-- Determine if the char is moving or not
+	local horizontalVel = root.AssemblyLinearVelocity * Vector3.new(1, 0,1) -- ignoring y jump/fall
+	local currentSpeed = horizontalVel.Magnitude
+	local isMoving = currentSpeed > 0.5
+	
+	-- Determine base state
+	local targetKey = "Idle"
+	if isMoving then
+		targetKey = self._isSprinting and "Run" or "Walk"
+	end
+	
+	if self:IsHurt() then
+		targetKey = "Hurt" .. targetKey -- Generates hurtidle, hurtwalk, or hurtrun
+	end
+	
+	-- state machine transition guard
+	if targetKey ~= self._currentLocomotionKey then
+		-- smoothly stop old animation
+		if self._currentLocomotionKey then
+			self:StopAnimation(self._currentLocomotionKey, 0.2)
+		end
+		
+		-- smoothly play the new animation
+		self:PlayAnimation(targetKey, 0.2)
+		self._currentLocomotionKey = targetKey
+	end
+end
+
+
+-- // ===================================================================================
+-- Sprinting
+-- // ===================================================================================
+
+
+function BaseCharacter:GetStamina(): number
+	return self._stamina
+end
+
+
+function BaseCharacter:SetSprinting(isSprinting: boolean)
+	self._isSprinting = isSprinting
+	local hum = self:GetHumanoid()
+	if hum then
+		hum.WalkSpeed = isSprinting
+		and self.GameplayConfig.SprintSpeed
+		or self.GameplayConfig.WalkSpeed
+	end
+end
+
+
+-- Called from the update loop
+function BaseCharacter:UpdateStamina(dt: number)
+	local config = self.GameplayConfig.Stamina
+	
+	if self._isSprinting then
+		self._stamina = math.max(0, self._stamina - config.DrainRate * dt)
+		
+		if self._stamina == 0 then
+			self:SetSprinting(false) -- force stop when tired
+		end
+	else
+		self._stamina = math.min(config.Max, self._stamina + config.GainRate * dt)
+	end
+end
+
+
+
+
+
+-- // ===================================================================================
+-- Status Effects System
+-- // ===================================================================================
+
+--[[
+	Status effects are named, timed overlays (e.g. "Exhausted", "Injured")
+	Re-applying a named effect refreshes it's duration
+	onApply and onRemove callbacks let abilites modify walkspeed, etc
+]]
+
+
+function BaseCharacter:ApplyStatusEffect(
+	name: string,
+	duration: number,
+	onApply: (any) -> (), -- type check
+	onRemove: (any) -> () 
+	-- what this means: onApply and onRemove are fields-
+	--  -that must be functions that take any arguments and return no values
+)
+	
+	-- Refresh if already active
+	if self.StatusEffects[name] then
+		task.cancel(self.StatusEffects[name].Task)
+		self.StatusEffects[name].OnRemove(self)
+	end
+	
+	onApply(self) -- passing self here js in case the ability needs the character context
+	
+	local taskThread = task.delay(duration, function()
+		local effect = self.StatusEffects[name]
+		self.StatusEffects[name] = nil
+		if effect then effect.OnRemove(self) end
+	end)
+	
+	self.StatusEffects[name] = {
+		Task = taskThread,
+		OnRemove = onRemove
+	}
+end
+
+
+function BaseCharacter:RemoveStatusEffect(name: string)
+		local effect = self.StatusEffects[name]
+		if effect then
+			task.cancel(effect.Task)
+			self.StatusEffects[name] = nil
+			effect.OnRemove(self)
+	end
+end
+
+
+function BaseCharacter:HasStatusEffect(name: string): boolean -- type check
+	return self.StatusEffects[name] ~= nil
+end
+
+
+
+
+
+---- Ability Delegation
+function BaseCharacter:UseAbility(slot: string): boolean
+	if self.Loadout then
+		return self.Loadout:ActivateSlot(slot, self)
+	end
+	return false
+end
+
+
+-- This'll be called from a runservice loop on the server
+function BaseCharacter:Update(dt: number)
+	self:UpdateStamina(dt)
+	self:UpdateLocomotion()
+	
+	if self.Loadout then
+		self.Loadout:UpdateAll(self, dt)
+	end
+end
+
+
+
+-- // ===================================================================================
+-- Cleanup
+-- // ===================================================================================
+function BaseCharacter:Destroy()
+	for _, conn in ipairs(self._connections) do conn:Disconnect() end
+	
+	for name in pairs(self.StatusEffects) do
+		self:RemoveStatusEffect(name)
+	end
+	
+	if self.Loadout then self.Loadout:Destroy() end
+	if self._loadedAnims then 
+		for _, track in pairs(self._loadedAnims) do track:Stop() track:Destroy() end
+	end
+end
+
+
+
+
+return BaseCharacter
