@@ -1,0 +1,56 @@
+local BaseCharacter = require(script.Parent.BaseCharacter)
+------------------------------------------------------------
+local BaseKiller = setmetatable({}, {__index = BaseCharacter})
+BaseKiller.__index = BaseKiller
+
+
+BaseKiller.INPUT_MAP = {
+	M1 = "PRIMARY_1",
+	Q = "PRIMARY_2",
+	E = "PRIMARY_3",
+	F = "PRIMARY_4",
+	R = "PRIMARY_5"
+}
+
+function BaseKiller.new(config)
+	config.GameplayConfig = config.GameplayConfig or {}
+
+
+	config.GameplayConfig.WalkSpeed = config.GameplayConfig.WalkSpeed or 20
+	config.GameplayConfig.SprintSpeed = config.GameplayConfig.SprintSpeed or 40
+	config.GameplayConfig.Health = config.GameplayConfig.Health or 666
+
+
+	local self = BaseCharacter.new(config)
+	setmetatable(self, BaseKiller)
+	
+
+	self.TerrorRadius = config.TerrorRadius or 32 -- studs	
+	self.KilledSurvivors = 0 -- this will help in win condition tracking
+	self.EscapedSurvivors = 0 
+	
+	return self
+end
+
+
+-- Override later 
+
+function BaseKiller:OnSurvivorKilled(survivor)
+	self.KilledSurvivors += 1
+end
+
+function BaseKiller:OnSurvivorEscaped(survivor)
+	self.EscapedSurvivors += 1
+end
+
+-- Input routing
+-- called by the servar after validating the remtoe
+function BaseKiller:HandleInput(inputName: string): boolean
+	local slot = self.INPUT_MAP[inputName]
+	if slot then 
+		return self:UseAbility(slot)
+	end
+	return false
+end
+
+return BaseKiller
