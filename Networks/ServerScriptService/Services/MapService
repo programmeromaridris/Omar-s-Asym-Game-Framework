@@ -1,0 +1,94 @@
+local MapService = {}
+local Workspace = game:GetService("Workspace")
+local MapsFolder = Workspace:WaitForChild("Maps")
+
+
+-- Helper functions
+
+-- Standard fisher-yates shuffle
+local function shuffleArray(t)
+	for i = #t, 2, -1 do
+		local j = math.random(i)
+		t[i], t[j] = t[j], t[i]
+	end
+end
+
+
+
+
+local function getHRP(character: Model?): BasePart?
+	if not character then
+		return nil
+	end
+	
+	return character:FindFirstChild("HumanoidRootPart") :: BasePart?
+end
+
+
+
+
+function MapService.GetAvailableMaps(): {Instance}
+	return MapsFolder:GetChildren()
+	
+end
+
+
+
+function MapService.PickRandomMap(): Instance
+	local maps = MapService.GetAvailableMaps()
+	assert(#maps > 0, "MapService: No maps were found in the mapsfolder.")
+	
+	shuffleArray(maps)
+	return maps[1]
+end
+
+
+---------------------------------------
+
+function MapService.TeleportPlayers(map: Instance, killer: Player, survivors: {Player})
+	local spawns = map:FindFirstChild("Spawns")
+	assert(spawns, "MapService, TeleportPlayers: Map does not have a 'Spawns' folder.")
+	
+	local killerSpawns = spawns:FindFirstChild("Killer")
+	local survivorsSpawns = spawns:FindFirstChild("Survivors")
+	assert(killerSpawns and survivorsSpawns,"MapService, TeleportPlayers: Map does not have a 'Killer' or 'Survivors' folder." )
+	
+	
+	-- Killer teleportation
+	local kSpawnParts = killerSpawns:GetChildren()
+	assert(#kSpawnParts > 0, "There are no killer spawn parts.")
+	
+	local kSpawnPoint = kSpawnParts[math.random(1, #kSpawnParts)] :: BasePart
+	local kHrp = getHRP(killer.Character)
+	if kHrp then
+		kHrp.CFrame = kSpawnPoint.CFrame + Vector3.new(0, 3, 0) -- offset by 3 studs 
+	end
+	
+	
+	-- Survivor teleportation
+	local sSpawnParts = survivorsSpawns:GetChildren()
+	assert(#sSpawnParts >= #survivors, "There are not enough survivor spawn points.")
+	
+	shuffleArray(sSpawnParts) -- shuffle so survivors dont spawn in the exact same pattern each time
+	for i, survivor in ipairs(survivors) do
+		local sHrp = getHRP(survivor.Character)
+		if sHrp then
+			local sSpawnPoint = sSpawnParts[i] :: BasePart
+			sHrp.CFrame = sSpawnPoint.CFrame + Vector3.new(0, 3, 0) -- offset by 3 studs 
+		end
+	end
+end
+
+
+function MapService.TeleportToLobby(players: {Player}, lobbySpawn: CFrame)
+	for _, player in ipairs(players) do
+		local hrp = getHRP(player.Character)
+		if hrp then
+			hrp.CFrame = lobbySpawn + Vector3.new(0, 3, 0) -- offset by 3 studs 
+		end
+	end
+end
+
+
+
+return MapService
