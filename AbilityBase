@@ -1,0 +1,70 @@
+local AbilityBase = {}
+AbilityBase.__index = AbilityBase
+
+export type AbilityConfig = {
+	Name: string, -- display name
+	Description: string, -- shown in ui
+	Cooldown: number?, -- shorthand for type or nil
+	IsSwappable: boolean?, 
+	IsPassive: boolean?
+}
+
+
+function AbilityBase.new(config: AbilityConfig)
+	local self = setmetatable({}, AbilityBase)
+	
+	self.Name = config.Name
+	self.Description = config.Description or ""
+	self.Cooldown = config.Cooldown or 0
+	self.IsSwappable = config.IsSwappable or false
+	self.IsPassive = config.IsPassive or false
+	self._lastUsed = -math.huge -- ready immediaetly
+	self._isActive = false
+	return self
+	
+end
+
+
+-- Helper Functions
+function AbilityBase:IsReady():	 boolean
+	return (os.clock() - self._lastUsed) >= self.Cooldown 
+end
+
+function AbilityBase:GetCoolDownRemaining(): number
+	return math.max(0, self.Cooldown - (os.clock() - self._lastUsed))
+end
+
+function AbilityBase:GetCoolDownFraction(): number -- 0 = ready, 1 = just used
+	if self.Cooldown == 0 then return 0 end
+	return math.clamp(self:GetCoolDownRemaining() / self.Cooldown, 0, 1)
+end
+
+-- override in subclasses
+
+function AbilityBase:OnActivate(character)   end   -- called when ability fires
+function AbilityBase:OnDeactivate(character) end   -- called when ability ends
+function AbilityBase:OnUpdate(character, dt) end   -- called every frame while active
+
+
+-- Life cycle (this is gonna be called by the ability loadout module later)
+function AbilityBase:Activate(character): boolean
+	if not self:IsReady() then return false end
+	self._lastUsed = os.clock()
+	self._isActive = true
+	self:OnActivate(character)
+	return true
+end
+
+function AbilityBase:Deactivate(character)
+	if not self._isActive then return end
+	self._isActive = false
+	self:OnDeactivate(character)
+end
+
+function AbilityBase:Destroy()
+	self._isActive = false
+end
+
+
+
+return AbilityBase
