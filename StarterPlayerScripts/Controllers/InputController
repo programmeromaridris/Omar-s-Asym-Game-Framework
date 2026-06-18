@@ -1,0 +1,68 @@
+--[[
+  client only
+  maps the keyboard input to ability slot names and fires the
+  server remote, no game logic dhoulf b kept here
+
+  to add a new key:
+    1. Add to KEY_MAP below and to valid_inputs in roundservice
+
+  the client predicts nyohing, it fires and waits for the
+  server to respond
+  
+  This keeps the server authoritative at the cost of slight input latency
+  which is ehhh negligble or wtv
+]]
+
+local UIS = game:GetService("UserInputService")
+local RS = game:GetService("ReplicatedStorage")
+
+-- TODO: get remotes function
+local function getRemotes()
+	return require(RS:WaitForChild("Network"):WaitForChild("Remotes"))
+end
+
+-- key > slot name mapping
+-- should match the input maps on survivor an dkiller classes
+local KEY_MAP: { [Enum.KeyCode]: string} = {
+	[Enum.KeyCode.Q] = "Q",
+	[Enum.KeyCode.E] = "E",
+	[Enum.KeyCode.F] = "F",
+	[Enum.KeyCode.R] = "R",
+}
+
+local MOUSE_MAP: { [Enum.UserInputType]: string} = {
+	[Enum.UserInputType.MouseButton1] = "M1"
+}
+
+local InputController = {}
+local _remotes = nil
+local _enabled = true -- change false
+
+function InputController.SetEnabled(enabled: boolean)
+	_enabled = enabled
+end
+
+function InputController.Init()
+	_remotes = getRemotes()
+	
+	UIS.InputBegan:Connect(function(input, gameProcessed)
+		if gameProcessed then return end
+		if not _enabled then return end
+		
+		local slotName = KEY_MAP[input.KeyCode] or MOUSE_MAP[input.UserInputType]
+		
+		if slotName then
+			_remotes.Get("UseAbility"):FireServer(slotName)
+			print("Used" .. slotName .. "ability!")
+		end
+	end)
+
+-- FOR TESTING: THIS HAS BEEN COMMENTED OUT
+
+-- enable input only ingame
+	--_remotes.Get("StateChanged").OnClientEvent:Connect(function(state)
+	--	_enabled = (state == "InGame")
+--	end)
+end
+
+return InputController
