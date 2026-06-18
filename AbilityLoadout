@@ -1,0 +1,115 @@
+--[[
+  Manages the ability deck for one character
+
+  Slots:
+  
+  PRIMARY_1   fixed to the character class and non swappable
+  PRIMARY_2   same as above ^
+  SUPPORT     swappable, player picks this in the lobby
+
+  Input flow:
+    InputController > fires slot name "PRIMARY_1" / "PRIMARY_2"/ "PRIMARY_3" / "SUPPORT 1-2"
+    Character:HandleInput > AbilityLoadout:ActivateSlot
+    AbilityBase:Activate > OnActivate
+
+  Adding more slots later (for wtv reason)
+    add the key to the SlotKey type, add to _slots, add an input
+    binding in the character's INPUT_MAP. nothing else changes
+]]
+local AbilityLoadout = {}
+AbilityLoadout.__index = AbilityLoadout
+
+export type SlotKey = "PRIMARY_1" | "PRIMARY_2" | "PRIMARY_3" | "PRIMARY_4" | "PRIMARY_5" | "SUPPORT_1" | "SUPPORT_2" 
+
+
+function AbilityLoadout.new(primary1, primary2, primary3, primary4, primary5, support1: any?, support2: any?)
+	local self = setmetatable({}, AbilityLoadout)
+	
+	self._slots = {
+		PRIMARY_1 = primary1,
+		PRIMARY_2 = primary2,
+		PRIMARY_3 = primary3,
+		PRIMARY_4 = primary4,
+		PRIMARY_5 = primary5,
+		SUPPORT_1 = support1,
+		SUPPORT_2 = support2,
+	}
+	return self
+end
+
+-- ====================================================
+-- Helper functions
+-- ====================================================
+
+function AbilityLoadout:GetAbility(slot: SlotKey)
+	return self._slots[slot]
+end
+
+function AbilityLoadout:GetAllSlots(): { [SlotKey]: any}
+	return self._slots
+end
+
+------------------------------------------------------------------
+
+-- Support
+
+function AbilityLoadout:SwapSupport(slot: "SUPPORT_1" | "SUPPORT_2", newAbility)
+	assert(newAbility, "AbilityLoadout.SwapSupport: nil ability")
+	assert(newAbility.IsSwappable, "Ability '" .. newAbility.Name .. "' is not swappable" )
+	
+	assert(slot == "SUPPORT_1" or slot == "SUPPORT_2", "AbilityLoadout.SwapSupport: Invalid support slot " .. tostring(slot))
+	
+	local old = self:GetAbility(slot)
+	if old then old:Destroy() end
+	
+	self._slots[slot]= newAbility
+end
+
+
+function AbilityLoadout:ClearSupport()
+	local old1 = self:GetAbility("SUPPORT_1") 
+	local old2 = self:GetAbility("SUPPORT_2")
+	
+	if old1 then old1:Destroy() end
+	if old2 then old2:Destroy() end
+	self._slots.SUPPORT_1 = nil
+	self._slots.SUPPORT_2 = nil
+end
+
+--------------------------------------------------------------------------
+
+-- Activation
+function AbilityLoadout:ActivateSlot(slot: SlotKey, character): boolean
+	local ability = self._slots[slot]
+	if not ability then return false end
+	return ability:Activate(character)
+end
+
+
+function AbilityLoadout:DeactivateSlot(slot: SlotKey, character)
+	local ability = self._slots[slot]
+	if ability then ability:Deactivate(character) end 
+end
+
+------------------------------------------------------------------------------
+
+-- Update loop
+function AbilityLoadout:UpdateAll(character, dt: number)
+	for _, ability in pairs(self._slots) do
+		if ability and ability._isActive then
+			ability:OnUpdate(character, dt)
+		end
+	end
+end
+
+--------------------------------------------------------------------------------
+
+-- Cleanup
+
+function AbilityLoadout:Destroy()
+	for _, ability in pairs(self._slots) do
+		if ability then ability:Destroy() end
+	end
+end
+
+return AbilityLoadout
