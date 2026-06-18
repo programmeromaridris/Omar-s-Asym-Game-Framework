@@ -1,0 +1,97 @@
+--[[
+	lightweight state machine
+	fires a BindableEvent on every transition so any system
+	can react without a direct reference to the round service
+
+	States:
+	Lobby              players are in the menu & picking loadouts
+	WaitingForPlayers  not enough players yet
+	Countdown          enough players = 30s countdown
+	InGame             match is live
+	PostGame           results screen, 10s before looping back
+	
+	HOW 2 USE:
+
+	listen for state changes
+	MatchState.OnStateChanged:Connect(function(newstate, oldstate)
+	
+	if newstate == "ingame" then
+	 do newstate shit
+	else
+	newstate == "Lobby" then
+	do lobby shit 
+	so on and so forth
+	)
+	
+	Transuitin to new states when conditions are met
+	If enoguh plyers are in:	
+	MatchState:Transition("inGame")
+	
+	Or checking current state before doing something
+	if MatchState:Is("InGame") then
+	some bullshit
+	end
+	
+]]
+
+local GameStateManager = {}
+GameStateManager.__index = GameStateManager
+
+
+
+export type GameState = "Lobby" | "WaitingForPlayers" | "Countdown" | "InGame" | "PostGame"
+
+
+
+-- This'll prevent accidental jumps
+local VALID_TRANSITIONS: { [GameState]: { GameState } } = {
+	Lobby             = { "WaitingForPlayers" },
+	WaitingForPlayers = { "Lobby", "Countdown" },
+	Countdown         = { "WaitingForPlayers", "InGame" },
+	InGame            = { "PostGame" },
+	PostGame          = { "Lobby", "WaitingForPlayers" },
+}
+
+
+
+function GameStateManager.new()
+	local self = setmetatable({}, GameStateManager)
+	self.CurrentState = "Lobby" :: GameState 
+	self._event = Instance.new("BindableEvent") -- server only signal
+	self.OnStateChanged = self._event.Event -- connect .OnStateChanged:Connect(function)
+	return self
+end
+
+
+
+
+function GameStateManager:Transition(newState: GameState)
+	local allowed = VALID_TRANSITIONS[self.CurrentState]
+	if not table.find(allowed, newState) then
+		warn(string.format(
+			"[GameState] Invalid transition: %s -> %s (ignored)",
+			self.CurrentState, newState
+			))
+		return
+	end
+
+	local old = self.CurrentState
+	self.CurrentState = newState
+	self._event:Fire(newState, old)
+	print(string.format("[GameState] %s -> %s", old, newState))
+end
+
+
+
+
+
+-- Helper functions
+function GameStateManager:Is(state: GameState): boolean
+	return self.CurrentState == state
+end
+
+function GameStateManager:Destroy()
+	self._event:Destroy()
+end
+
+return GameStateManager
