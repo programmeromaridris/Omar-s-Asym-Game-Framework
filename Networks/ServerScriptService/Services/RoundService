@@ -1,0 +1,326 @@
+--[[
+	Full round lifecycle on the server
+	Handles matchmaking transitions, role assignment, character initializaiton,
+	map loading, runtime update replication, and win condition verification]]
+
+
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local RUNS = game:GetService("RunService")
+
+-- Subsystem requirements
+local Remotes = require(RS.Network.Remotes)
+local GameStateManager = require(RS.Systems.GameStateManager)
+local KillerSelector = require(RS.Systems.KillerSelector)
+local MapService = require(script.Parent.MapService)
+
+-- OO Framework components
+local AbilityLoadout = require(RS.Classes.AbilityLoadout)
+local AbilityRegistry = require(RS.Abilities.AbilityRegistry)
+local BaseKiller = require(RS.Classes.BaseKiller)
+local BaseSurvivor = require(RS.Classes.BaseSurvivor)
+
+-- Config constants
+local MIN_PLAYERS = 2
+local COUNTDOWN_TIME = 10
+local ROUND_DURATION = 600
+local POSTGAME_TIME = 10
+local LOBBY_SPAWN_CFRAME = nil -- when we make the lobby, remember to fill this out
+-----------------------------------------------------------------------
+
+local RoundService = {}
+
+local stateManager = GameStateManager.new()
+local killerHistory = {}
+
+local activeKillerObj = nil
+local activeSurvObj: {[number]: any } = {}
+
+-- Tracks selected lobby support choices before character instances are generated
+local pendingSupportChoices: {[number]: {SUPPORT_1: string?, SUPPORT_2: string?} } = {}
+
+
+-- Helper funcs
+local function getPlayers(): {Player}
+	return Players:GetPlayers()
+end
+
+
+
+local function broadcastState(newState: string)
+	Remotes.Get("StateChanged"):FireAllClients(newState)
+end
+
+
+
+
+local function checkWinConditions(): (boolean, string?)
+	local totalSurvivors = 0
+	local deadCount = 0
+	local escaepdCount = 0
+	
+	for _, survivor in pairs(activeSurvObj) do
+		totalSurvivors += 1
+		if survivor.HealthState == "Dead" or survivor.IsDead then
+			deadCount += 1
+		elseif survivor.HealthState == "Escaped" then
+			escaepdCount += 1
+		end
+	end
+
+
+	-- edge case, if survivors drop mid game and no one is left
+	if totalSurvivors == 0 then
+		return true, "No survivors remaining."
+	end
+	
+	-- Killer elim victor
+	if deadCount == totalSurvivors then
+		return true, "Killer"
+	end
+	
+	-- Escape victor
+	if escaepdCount > 0 and (deadCount + escaepdCount == totalSurvivors) then
+		return true, "Survivors"
+	end
+	
+	return false, nil
+end
+
+
+
+
+-- Safe yields until a characters model is fully loaded in the workspace
+local function acquireReadyCharacter(player: Player): Model
+	player:LoadCharacterAsync()
+	local character = player.Character or player.CharacterAdded:Wait()
+	
+	-- force physical assembly replication safety frame
+	if not character:FindFirstChild("HumanoidRootPart") then
+		character:WaitForChild("HumanoidRootPart", 5)
+	end
+	return character
+end
+
+
+
+-- Instantiate game tracking classes and binds individual character mechanics
+local function AssignRoles(killer: Player, survivors: { Player })
+	
+	-- Initialize the killer object
+	local killerChar = acquireReadyCharacter(killer)
+	local killerLoadout = AbilityLoadout.new(nil, nil, nil, nil, nil) -- TODO: Populate with actual character classes when done
+	
+	activeKillerObj = BaseKiller.new({
+		Player = killer,
+		Model = killerChar,
+		Loadout = killerLoadout
+	})
+	
+	Remotes.Get("AssignRole"):FireClient(killer, "Killer")
+	
+	for _, survivor in ipairs(survivors) do
+		local userId = survivor.UserId
+		local survivorChar = acquireReadyCharacter(survivor)
+		
+		-- Fetch pre-selected lobby support configurations
+		local choices = pendingSupportChoices[userId] or {}
+		local s1Class = choices.SUPPORT_1 and AbilityRegistry.Get(choices.SUPPORT_1)
+		local s2Class = choices.SUPPORT_2 and AbilityRegistry.Get(choices.SUPPORT_2)
+			
+		local sup1Instance = s1Class and s1Class.new()
+		local sup2Instance = s2Class and s2Class.new()
+		
+		local survivorLoadout = AbilityLoadout.new(nil, nil, nil, nil, nil, sup1Instance, sup2Instance) -- again, populate with character classes when done
+		
+		activeSurvObj[userId] = BaseSurvivor.new({
+			Player = survivor,
+			Model = survivorChar,
+			Loadout = survivorLoadout
+		})
+		
+		Remotes.Get("AssignRole"):FireClient(survivor, "Survivor")
+	end
+end
+
+
+local function cleanUp(chosenMap: Instance?)
+	-- Garbage collect custom wrapper classes
+	if activeKillerObj then
+		activeKillerObj:Destroy()
+		activeKillerObj = nil
+	end
+
+	for userId, obj in pairs(activeSurvObj) do
+		obj:Destroy()
+		activeSurvObj[userId] = nil
+	end
+
+	-- Clean active map instance from Workspace
+	if chosenMap then
+		chosenMap:Destroy()
+	end
+
+	-- Extract remaining players back safely into the lobby environment
+	MapService.TeleportToLobby(getPlayers(), LOBBY_SPAWN_CFRAME)
+end
+
+
+
+-- Round lifecycle management
+local function endRound(winner: string?)
+	stateManager:Transition("PostGame")
+	broadcastState("PostGame")
+	Remotes.Get("ShowResults"):FireAllClients(winner or "Time Ran Out")
+	task.wait(POSTGAME_TIME)
+end
+
+
+
+local function runRound()
+	local players = getPlayers()
+
+	-- Map Preparation Phase
+	local selectedMapTemplate = MapService.PickRandomMap()
+	local activeMapInstance = selectedMapTemplate:Clone()
+	activeMapInstance.Parent = game.Workspace
+
+	-- Select and document history parameters
+	local killer = KillerSelector.SelectKiller(players, killerHistory)
+	KillerSelector.RecordKillerRound(killerHistory, killer)
+
+	local survivors = {}
+	for _, player in ipairs(players) do
+		if player ~= killer then 
+			table.insert(survivors, player) 
+		end
+	end
+
+	-- Instantiate characters and fire role assignments
+	AssignRoles(killer, survivors)
+
+	-- Execute world physics transitions
+	MapService.TeleportPlayers(activeMapInstance, killer, survivors)
+
+	stateManager:Transition("InGame")
+	broadcastState("InGame") 
+
+	-- Establish continuous delta updates loop running on frame step
+	local elapsed = 0
+	local heartbeat = RUNS.Heartbeat:Connect(function(dt)
+		if activeKillerObj then 
+			activeKillerObj:Update(dt)  
+		end
+		for _, obj in pairs(activeSurvObj) do
+			obj:Update(dt)
+		end
+	end)
+
+	-- Main lifecycle polling execution loop
+	while stateManager:Is("InGame") and elapsed < ROUND_DURATION do
+		task.wait(1)
+		elapsed += 1
+
+		local won, winner = checkWinConditions()
+		if won then
+			heartbeat:Disconnect()
+			endRound(winner)
+			cleanUp(activeMapInstance)
+			return
+		end
+	end
+
+	-- Round termination due to expiration of duration clock
+	heartbeat:Disconnect()
+	endRound(nil)   
+	cleanUp(activeMapInstance)
+end
+
+
+
+local function matchmakingLoop()
+	while true do
+		stateManager:Transition("WaitingForPlayers")
+		broadcastState("WaitingForPlayers")
+
+		while #getPlayers() < MIN_PLAYERS do
+			task.wait(3)
+		end
+
+		stateManager:Transition("Countdown")
+		broadcastState("Countdown")
+
+		local countdownElapsed = 0
+		while countdownElapsed < COUNTDOWN_TIME do
+			task.wait(1)
+			countdownElapsed += 1
+
+			-- Break and revert if active connections drop below minimum floor criteria
+			if #getPlayers() < MIN_PLAYERS then
+				stateManager:Transition("WaitingForPlayers")
+				broadcastState("WaitingForPlayers")
+				countdownElapsed = 0
+				while #getPlayers() < MIN_PLAYERS do task.wait(3) end
+				stateManager:Transition("Countdown")
+				broadcastState("Countdown")
+			end
+		end
+
+		runRound()
+	end
+end
+
+
+
+-- Initialization and network reception
+function RoundService.Init()
+	Remotes.Init()
+
+	-- Input Execution Router
+	Remotes.Get("UseAbility").OnServerEvent:Connect(function(player, inputName)
+		if not stateManager:Is("InGame") then return end
+
+		local VALID_INPUTS = { M1 = true, Q = true, E = true, F = true, R = true }
+		if not VALID_INPUTS[inputName] then return end
+
+		local userId = player.UserId
+		if activeKillerObj and activeKillerObj.Player == player then
+			activeKillerObj:HandleInput(inputName)
+		elseif activeSurvObj[userId] then
+			activeSurvObj[userId]:HandleInput(inputName)
+		end
+	end)
+
+	-- Safe Lobby Phase Selection Management Routing
+	Remotes.Get("SwapSupport").OnServerEvent:Connect(function(player, slot, abilityId)
+		if stateManager:Is("InGame") then return end 
+		if slot ~= "SUPPORT_1" and slot ~= "SUPPORT_2" then return end
+
+		-- Ensure structural presence of data entry registry
+		if not pendingSupportChoices[player.UserId] then
+			pendingSupportChoices[player.UserId] = {}
+		end
+
+		local ok, err = pcall(function()
+			-- Verify verification string exists within registered abilities array
+			local _ = AbilityRegistry.Get(abilityId)
+			pendingSupportChoices[player.UserId][slot] = abilityId
+		end)
+
+		if not ok then
+			warn(string.format("[RoundService] Lobby Selection Validation Failed for %s: %s", player.Name, tostring(err)))
+		else
+			print(string.format("[RoundService] Logged %s slot choice for %s -> %s", slot, player.Name, abilityId))
+		end
+	end)
+
+	-- Handle structural profile storage maintenance updates on player termination
+	Players.PlayerRemoving:Connect(function(player)
+		pendingSupportChoices[player.UserId] = nil
+		killerHistory[player.UserId] = nil
+	end)
+
+	task.spawn(matchmakingLoop)
+end
+
+return RoundService
