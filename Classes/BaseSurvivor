@@ -1,0 +1,128 @@
+--[[
+	Survivors: two primary abilities, two support
+	Can swap in lobby via swapsupportability()
+	Health state machine: healthy > injured> dead/escaped
+		]]
+
+local AbilityRegistry = require(script.Parent.Parent.Abilities.AbilityRegistry)
+local BaseCharacter = require(script.Parent.BaseCharacter)
+
+local BaseSurvivor = setmetatable({}, {__index = BaseCharacter})
+BaseSurvivor.__index = BaseSurvivor
+
+BaseSurvivor.INPUT_MAP = {
+	Q = "PRIMARY_1",
+	E = "PRIMARY_2",
+	F = "SUPPORT_1",
+	R = "SUPPORT_2",
+}
+
+export type HealthState = "Healthy" | "Injured" | "Dead" | "Escaped"
+
+function BaseSurvivor.new(config)
+
+	config.GameplayConfig = config.GameplayConfig or {}
+
+	config.GameplayConfig.WalkSpeed = config.GameplayConfig.WalkSpeed or 16
+	config.GameplayConfig.SprintSpeed = config.GameplayConfig.SprintSpeed or 26
+	config.GameplayConfig.Health = config.GameplayConfig.Health or 100
+
+	local self = BaseCharacter.new(config)
+	setmetatable(self, BaseSurvivor)
+	
+	self.HealthState = "Healthy" :: HealthState
+	self.IsDead = false
+	self.IsTasking = false
+	return self
+end
+
+
+local SPEED_MODIFIERS: { [HealthState]: number} = {
+	Healthy = 1,
+	Injured = 0.85,
+	Dead = 0,
+	Escaped = 0,
+}
+
+
+-- Unifies both sprinting (from basechar) and health state mechanics to calculate actual hum speed
+function BaseSurvivor:UpdateWalkSpeed()
+	local hum = self:GetHumanoid()
+	if not hum then warn("Hum wasn't found.") return end
+	
+	local baseSpeed = self._isSprinting 
+					  and self.GameplayConfig.SprintSpeed	
+					  or self.GameplayConfig.WalkSpeed
+					
+	local modifiers = SPEED_MODIFIERS[self.HealthState] or 1
+	hum.WalkSpeed = baseSpeed * modifiers
+end
+
+
+function BaseSurvivor:SetSprinting(isSprinting: boolean)
+	self._isSprinting = isSprinting
+	self:UpdateWalkSpeed()
+end
+
+
+
+function BaseSurvivor:SetHealthState(newState: HealthState)
+	if self.HealthState == newState then return end
+	
+	local old = self.HealthState
+	self.HealthState = newState
+	
+	self:UpdateWalkSpeed()
+	self:OnHealthStateChanged(old, newState)
+end
+
+
+function BaseSurvivor:IsHurt(): boolean
+	return self.HealthState == "Injured"
+end
+
+-- override to react to state changes (play animations, fire events, etc.)
+function BaseSurvivor:OnHealthStateChanged(from: HealthState, to: HealthState) end
+
+
+
+-- Ability guards
+function BaseSurvivor:CanUseAbility(): boolean
+	return self.HealthState ~= "Dead"
+		and self.HealthState ~= "Escaped"
+		and not self.IsTasking
+end
+
+
+--[[
+ Support swap
+  Ccll this during the lobby phase before the round starts
+  accepts either an ability instance or an abilityId string
+  If a string is passed abilityreg resolves it
+]]
+
+function BaseSurvivor:SwapSupportAbility(slot: "SUPPORT_1" | "SUPPORT_2", abilityOrId)
+	local ability
+	if type(abilityOrId) == "string" then
+		local class = AbilityRegistry.Get(abilityOrId)
+		ability = class.new()
+	else
+		ability = abilityOrId
+	end
+	
+	if self.Loadout then
+		self.Loadout:SwapSupport(slot, ability)
+	end
+end
+
+-- Input routing
+function BaseSurvivor:HandleInput(inputName: string): boolean
+	if not self:CanUseAbility() then return false end
+	local slot = self.INPUT_MAP[inputName]
+	if slot then
+		return self:UseAbility(slot)
+	end
+	return false
+end
+
+return BaseSurvivor
