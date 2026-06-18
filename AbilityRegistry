@@ -1,0 +1,60 @@
+
+local AbilityRegistry = {}
+local _registry: { [string]: any} = {}
+
+--[[
+	Couldn't explain tihs if my life depended on it
+	basically for server-client communication you use this instead of remote events
+	client sends a string and this registry handles it]]
+-- // ========================================================================================
+
+
+
+
+
+-- // ========================================================================================
+function AbilityRegistry.Register(id: string, abilityClass)
+	assert(not _registry[id], "AbilityRegistry: duplicate id " .. id .. "'")
+	_registry[id] = abilityClass
+end
+
+function AbilityRegistry.Get(id: string)
+	local class = _registry[id]
+	assert(class, "AbilityRegistry: unknown ability " .. id .. "'")
+	return class
+end
+
+function AbilityRegistry.GetAll(): { [string]: any}
+	return _registry
+end
+
+
+-- // ========================================================================================
+
+
+-- for convinence, just return the swappable support abiltiyes
+function AbilityRegistry.GetSwappable(): { string }
+	
+-- this is a bit of a hack but eh
+--[[
+	because the IsSwappable bool is defined inside the constructor in Abilitybase
+	the class itself doesn't know if its swappable or not until its created .
+	to get around this, this script makes a temp fake instance of the ability
+	it checks if its swappable, then if it is, it adds it to the out list
+	then destroys the temp instance so it doesnt clog up memory
+	
+	this is a temp hack will prolly find a better way to do this
+			]]	
+	
+	local out = {}
+	for id, cls in pairs(_registry) do
+		local probe = cls.new({Name = "Temp", Description = "bullashit" }) -- Pass a mock table because abilitybase expects a config table 
+		if probe.IsSwappable then
+			table.insert(out, id)
+		end
+		probe:Destroy()
+	end
+	return out
+end
+
+return AbilityRegistry
