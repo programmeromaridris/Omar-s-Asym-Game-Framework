@@ -1,0 +1,76 @@
+local CharacterRegistry = {}
+local _registry: {[string]: any} = {}
+
+-- Helper to convert nested config tables into clean strings for ui textlabels
+local function serializeTable(t: {[any]: any}, indent: string?): string
+	indent = indent or " "
+	local str = ""
+
+	for k, v in pairs(t) do
+		if type(v) == "table" then
+			str = str .. indent .. tostring(k) .. ":\n" .. serializeTable(v, indent .. " ")
+		else
+			str = str .. indent .. tostring(k) .. ": " .. tostring(v) .. "\n"
+		end
+	end
+	return str
+end
+
+
+
+function CharacterRegistry.Register(id: string, class, charType: string)
+	assert(not _registry[id], "CharacterRegistry: Duplicate id " .. id .. " ")
+	_registry[id] = {Class = class, Type = charType}
+end
+
+function CharacterRegistry.Get(id: string)
+	local record = _registry[id]
+	assert(record, "CharacterRegistry: No entry for " .. id)
+	return record
+end
+
+function CharacterRegistry.GetCharacterInfo(id: string)
+	local record = _registry[id]
+	if not record then return nil end
+	
+	local Class = record.Class
+	
+	
+	-- Create a mock player to bypass basechar assertions
+	local mockPlayer = {Name = "DebugMock", character = nil, UserId = -1}
+	
+	local probe = Class.new({ Player = mockPlayer })
+	
+	-- extract and stringify the data
+
+	local info = {
+		Id = id,
+		Type = record.Type,
+		Name = probe.StoreConfig.Description and id or "Unknown",
+		Description = probe.StoreConfig.Description or "No description provided.",
+		Health = probe.GameplayConfig.Health,
+		Speed = probe.GameplayConfig.WalkSpeed,
+
+		-- Stringified configs that can  to be dumped right  into a UI TextLabel
+		StoreConfigStr = serializeTable(probe.StoreConfig),
+		AnimationConfigStr = serializeTable(probe.AnimationConfig),
+		GameplayConfigStr = serializeTable(probe.GameplayConfig),
+
+		-- Raw Input Map for dynamic UI binding lists
+		InputMap = Class.INPUT_MAP or {}
+	}
+
+	-- cleanup
+	if probe.Destroy then probe:Destroy() end
+	return info
+end
+
+function CharacterRegistry.GetAllInfo()
+	local out = {}
+	for id, _ in pairs(_registry) do
+		table.insert(out, CharacterRegistry.GetCharacterInfo(id))
+	end
+	return out
+end
+
+return CharacterRegistry
